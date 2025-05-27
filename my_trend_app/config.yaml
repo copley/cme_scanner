@@ -1,0 +1,61 @@
+symbols:
+  - MES
+  - MNQ
+  - MYM
+  - M2K
+
+contracts:
+  MES:
+    symbol: "MES"
+    currency: "USD"
+    exchange: "CME"
+    secType: "FUT"
+    lastTradeDateOrContractMonth: "202506"
+
+  MNQ:
+    symbol: "MNQ"
+    currency: "USD"
+    exchange: "CME"
+    secType: "FUT"
+    lastTradeDateOrContractMonth: "202506"
+
+  MYM:
+    symbol: "MYM"
+    currency: "USD"
+    exchange: "CME"
+    secType: "FUT"
+    lastTradeDateOrContractMonth: "202506"
+
+  M2K:
+    symbol: "M2K"
+    currency: "USD"
+    exchange: "CME"
+    secType: "FUT"
+    lastTradeDateOrContractMonth: "202506"
+
+timeframes:
+  - name: "Daily"
+    durationStr: "150 D"
+    barSizeSetting: "1 day"
+    lookback: 100
+  - name: "4H"
+    durationStr: "80 D"
+    barSizeSetting: "4 hours"
+    lookback: 100
+  - name: "1H"
+    durationStr: "40 D"
+    barSizeSetting: "1 hour"
+    lookback: 100
+
+model:
+  path: "logistic_model.pkl"
+
+thresholds:
+  continue: 0.8
+  watch: 0.5
+
+logging:
+  level: "INFO"
+  file: "trend_app.log"
+  maxBytes: 10485760
+  backupCount: 5

@@ -1,0 +1,7 @@
+ib_insync
+numpy
+pandas
+PyYAML
+scikit-learn
+ta
+loguru
