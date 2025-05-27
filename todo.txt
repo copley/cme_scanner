@@ -1,0 +1,555 @@
+Directory Structure
+arduino
+Copy
+my_trend_app/
+│
+├── config.py
+├── ib_client.py
+├── indicators.py
+├── model.py
+├── printer.py
+├── main.py
+├── requirements.txt
+└── config.yaml
+Note: You can use either YAML or JSON for configuration. Here we’ll use YAML for convenience.
+
+Example requirements.txt
+nginx
+Copy
+ib_insync
+numpy
+pandas
+PyYAML
+scikit-learn
+ta
+loguru
+ib_insync: For Interactive Brokers API via Python.
+
+numpy, pandas: Standard data libraries.
+
+PyYAML: For reading YAML config.
+
+scikit-learn: For loading/using the logistic regression model.
+
+ta: For easy calculation of technical indicators (including ADX).
+
+loguru (optional): For advanced logging convenience; you can also just use built-in logging.
+
+Example config.yaml
+yaml
+Copy
+symbols:
+  - MES
+  - MNQ
+  - MYM
+  - M2K
+
+contracts:
+  MES: 
+    symbol: "MES" 
+    currency: "USD" 
+    exchange: "CME" 
+    secType: "FUT" 
+    lastTradeDateOrContractMonth: "202506"  # Adjust to your needs
+
+  MNQ: 
+    symbol: "MNQ" 
+    currency: "USD" 
+    exchange: "CME" 
+    secType: "FUT" 
+    lastTradeDateOrContractMonth: "202506"
+
+  MYM: 
+    symbol: "MYM" 
+    currency: "USD" 
+    exchange: "CME" 
+    secType: "FUT" 
+    lastTradeDateOrContractMonth: "202506"
+
+  M2K: 
+    symbol: "M2K" 
+    currency: "USD" 
+    exchange: "CME" 
+    secType: "FUT" 
+    lastTradeDateOrContractMonth: "202506"
+
+timeframes:
+  - name: "Daily"
+    durationStr: "150 D"    # IB duration string
+    barSizeSetting: "1 day"
+    lookback: 100
+
+  - name: "4H"
+    durationStr: "80 D"
+    barSizeSetting: "4 hours"
+    lookback: 100
+
+  - name: "1H"
+    durationStr: "40 D"
+    barSizeSetting: "1 hour"
+    lookback: 100
+
+model:
+  path: "logistic_model.pkl"
+
+thresholds:
+  continue: 0.8
+  watch: 0.5
+
+logging:
+  level: "INFO"
+  file: "trend_app.log"
+  maxBytes: 10485760  # 10 MB
+  backupCount: 5
+Explanation:
+
+symbols: A simple list of symbol codes (MES, MNQ, etc.).
+
+contracts: IB contract details for each symbol. You can adjust lastTradeDateOrContractMonth to your desired front month, or dynamically update as needed.
+
+timeframes: Each timeframe has an IB durationStr, a barSizeSetting, and a lookback (e.g. how many bars you’ll use for calculations).
+
+model: Where your logistic regression pickle file is located.
+
+thresholds: Probability cutoffs for the signals.
+
+logging: Basic logging config parameters (if using built-in logging or you can adapt for loguru).
+
+config.py
+python
+Copy
+import yaml
+import os
+
+def load_config(config_file='config.yaml'):
+    """
+    Load and validate the configuration from a YAML file.
+    """
+    if not os.path.exists(config_file):
+        raise FileNotFoundError(f"Config file {config_file} not found.")
+
+    with open(config_file, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # You can add extra validation or defaults here
+    return config
+ib_client.py
+python
+Copy
+import time
+from ib_insync import IB, util
+
+class IBClient:
+    def __init__(self, host='127.0.0.1', port=7497, clientId=1, max_retries=3, logger=None):
+        self.ib = IB()
+        self.host = host
+        self.port = port
+        self.clientId = clientId
+        self.max_retries = max_retries
+        self.logger = logger
+        self.connect()
+
+    def connect(self):
+        """
+        Attempt to connect to TWS/IB Gateway, retrying on failure.
+        """
+        attempt = 0
+        while attempt < self.max_retries:
+            try:
+                if self.logger:
+                    self.logger.info(f"Connecting to IB at {self.host}:{self.port} (clientId={self.clientId})")
+                self.ib.connect(self.host, self.port, clientId=self.clientId, timeout=10)
+                if self.ib.isConnected():
+                    if self.logger:
+                        self.logger.info("Successfully connected to IB.")
+                    return
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Connection attempt {attempt+1} failed: {e}")
+                time.sleep(5)
+                attempt += 1
+        raise ConnectionError("Could not connect to TWS/IB Gateway after multiple retries.")
+
+    def get_historical_data(self, contract, endDateTime='', durationStr='1 D',
+                            barSizeSetting='1 day', whatToShow='TRADES', useRTH=True):
+        """
+        Request historical data for a given contract.
+        """
+        if not self.ib.isConnected():
+            self.logger.warning("IB not connected, reconnecting...")
+            self.connect()
+
+        bars = self.ib.reqHistoricalData(
+            contract,
+            endDateTime=endDateTime,
+            durationStr=durationStr,
+            barSizeSetting=barSizeSetting,
+            whatToShow=whatToShow,
+            useRTH=useRTH,
+            formatDate=1
+        )
+        return util.df(bars)
+
+    def disconnect(self):
+        if self.ib.isConnected():
+            self.ib.disconnect()
+indicators.py
+python
+Copy
+import numpy as np
+import pandas as pd
+from ta.trend import ADXIndicator
+from ta.volatility import AverageTrueRange
+
+def compute_indicators(df: pd.DataFrame, lookback: int = 100):
+    """
+    Compute ADX(14), % above 20MA (over last N=20 bars), 
+    and R² of recent returns vs. ATR on the last `lookback` bars.
+    
+    Returns a dict with keys: ['ADX', '%Above20MA', 'R2'] 
+    for the *most recent* bar’s indicator values.
+    """
+    # Ensure we have enough data
+    if len(df) < lookback:
+        return None
+
+    # Sort by date if not sorted
+    df = df.sort_values('date').reset_index(drop=True)
+
+    # 1. ADX(14)
+    adx_indicator = ADXIndicator(
+        high=df['high'], 
+        low=df['low'], 
+        close=df['close'], 
+        window=14,
+        fillna=False
+    )
+    df['ADX_14'] = adx_indicator.adx()
+
+    # 2. 20-bar MA
+    df['MA_20'] = df['close'].rolling(20).mean()
+    # Percentage of last N=20 bars whose close > 20-bar MA
+    recent_df_20 = df.tail(20)
+    pct_above_ma = 100.0 * np.sum(recent_df_20['close'] > recent_df_20['MA_20']) / 20.0
+
+    # 3. R² of recent returns vs. ATR
+    #    - We'll compute daily returns = close.diff() / close.shift()
+    #    - We'll compute ATR(14)
+    #    - We'll do a linear regression of returns ~ ATR
+    #    - Then we compute the R² from that regression over `lookback` bars
+    df['returns'] = df['close'].pct_change()
+    atr_indicator = AverageTrueRange(
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        window=14,
+        fillna=False
+    )
+    df['ATR_14'] = atr_indicator.average_true_range()
+
+    lookback_df = df.tail(lookback).dropna(subset=['returns', 'ATR_14'])
+    if len(lookback_df) < 2:
+        # Not enough data to compute regression
+        r2_value = np.nan
+    else:
+        # Simple linear regression: returns ~ ATR
+        x = lookback_df['ATR_14'].values.reshape(-1, 1)
+        y = lookback_df['returns'].values
+        # We can do a quick linear regression with numpy
+        # If you want more advanced, use scikit-learn's LinearRegression
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import r2_score
+
+        lr = LinearRegression()
+        lr.fit(x, y)
+        y_pred = lr.predict(x)
+        r2_value = r2_score(y, y_pred)
+
+    # Return the *latest* ADX from the series
+    adx_latest = df['ADX_14'].iloc[-1]
+
+    return {
+        'ADX': float(adx_latest),
+        '%Above20MA': float(pct_above_ma),
+        'R2': float(r2_value)
+    }
+model.py
+python
+Copy
+import pickle
+import numpy as np
+
+class TrendModel:
+    def __init__(self, model_path, logger=None):
+        self.logger = logger
+        with open(model_path, 'rb') as f:
+            self.model = pickle.load(f)  # assuming it's a scikit-learn LogisticRegression model
+
+    def predict_probability(self, features):
+        """
+        Given a feature dictionary across timeframes, produce the
+        probability that the trend continues.
+
+        Example input features:
+        {
+          "Daily": { "ADX": ..., "%Above20MA": ..., "R2": ... },
+          "4H":    { "ADX": ..., "%Above20MA": ..., "R2": ... },
+          "1H":    { "ADX": ..., "%Above20MA": ..., "R2": ... }
+        }
+
+        For a simple approach, you might flatten these into a list:
+        [Daily.ADX, Daily.%Above20MA, Daily.R2, 4H.ADX, 4H.%Above20MA, ... ]
+        """
+        # Flatten feature dict in a deterministic order:
+        #   e.g. [ADX_daily, pctAbove_daily, R2_daily, ADX_4H, pctAbove_4H, R2_4H, ...]
+
+        # Sort timeframes by name or rely on config ordering
+        timeframe_order = sorted(features.keys())  # or a fixed list
+        feat_list = []
+        for tf in timeframe_order:
+            tf_vals = features[tf]
+            feat_list.append(tf_vals['ADX'])
+            feat_list.append(tf_vals['%Above20MA'])
+            feat_list.append(tf_vals['R2'])
+
+        X = np.array(feat_list).reshape(1, -1)
+        prob = self.model.predict_proba(X)[0, 1]  # Probability of "trend continue" = class 1
+        return float(prob)
+printer.py
+python
+Copy
+import sys
+from datetime import datetime
+
+# Simple ANSI color codes for demonstration
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+RESET = "\033[0m"
+
+def color_probability(p, thresholds):
+    """
+    Return colored string for probability based on thresholds.
+    thresholds = { 'continue': 0.8, 'watch': 0.5 }
+    """
+    if p >= thresholds['continue']:
+        return f"{GREEN}{p:.2f}{RESET}"
+    elif p >= thresholds['watch']:
+        return f"{YELLOW}{p:.2f}{RESET}"
+    else:
+        return f"{RED}{p:.2f}{RESET}"
+
+def print_report(results, thresholds):
+    """
+    Print a formatted table of results.
+    Each item in `results` is a dict with keys:
+      'symbol', 'timeframe', 'ADX', '%Above20MA', 'R2', 'probability', 'signal'
+    """
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    line = f"{now_str} ─────────────────────────────────"
+    print(line)
+    header = "Symbol   TF     ADX     %>20MA   R2     P(cont)   Signal"
+    print(header)
+
+    for row in results:
+        symbol = row['symbol']
+        tf = row['timeframe']
+        adx = row['ADX']
+        pct = row['%Above20MA']
+        r2 = row['R2']
+        p = row['probability']
+        sig = row['signal']
+
+        p_colored = color_probability(p, thresholds)
+        print(f"{symbol:<8}{tf:<7}{adx:>6.2f}{pct:>9.1f}%{r2:>7.2f}   {p_colored:>8}   {sig}")
+    print()
+main.py
+python
+Copy
+import argparse
+import os
+import pandas as pd
+from datetime import datetime
+from loguru import logger  # or use built-in logging
+
+from config import load_config
+from ib_client import IBClient
+from indicators import compute_indicators
+from model import TrendModel
+from printer import print_report
+
+def main():
+    parser = argparse.ArgumentParser(description="Trend Continuation Probability App")
+    parser.add_argument('--config', default='config.yaml', help="Path to config YAML file.")
+    parser.add_argument('--host', default='127.0.0.1', help="TWS/IB Gateway host.")
+    parser.add_argument('--port', default=7497, type=int, help="TWS/IB Gateway port.")
+    parser.add_argument('--clientId', default=1, type=int, help="Client ID for IB connection.")
+    args = parser.parse_args()
+
+    # Load config
+    config = load_config(args.config)
+
+    # Setup logging (Loguru example)
+    log_level = config.get('logging', {}).get('level', 'INFO')
+    log_file = config.get('logging', {}).get('file', 'trend_app.log')
+    max_bytes = config.get('logging', {}).get('maxBytes', 10_000_000)
+    backup_count = config.get('logging', {}).get('backupCount', 5)
+
+    logger.remove()  # remove default handler
+    logger.add(
+        log_file, 
+        rotation=max_bytes, 
+        retention=backup_count,
+        level=log_level
+    )
+    logger.add(lambda msg: print(msg, end=""), level=log_level)  # also print to stdout
+
+    # Connect to IB
+    ib_client = IBClient(
+        host=args.host, 
+        port=args.port, 
+        clientId=args.clientId,
+        max_retries=3,
+        logger=logger
+    )
+
+    # Load model
+    model_path = config['model']['path']
+    trend_model = TrendModel(model_path, logger=logger)
+
+    symbols = config['symbols']
+    contracts_config = config['contracts']
+    timeframes = config['timeframes']
+    thresholds = config['thresholds']
+
+    results = []
+
+    for symbol in symbols:
+        contract_info = contracts_config.get(symbol)
+        if not contract_info:
+            logger.warning(f"No contract info found for symbol {symbol}, skipping.")
+            continue
+
+        # Create an IB contract object
+        from ib_insync import Future
+        contract = Future(
+            symbol=contract_info['symbol'],
+            lastTradeDateOrContractMonth=contract_info['lastTradeDateOrContractMonth'],
+            exchange=contract_info['exchange'],
+            currency=contract_info['currency']
+        )
+
+        # We will collect indicators for each timeframe
+        # into a dict keyed by timeframe name
+        tf_indicator_dict = {}
+
+        for tf in timeframes:
+            tf_name = tf['name']
+            durationStr = tf['durationStr']
+            barSizeSetting = tf['barSizeSetting']
+            lookback = tf.get('lookback', 100)
+
+            try:
+                df = ib_client.get_historical_data(
+                    contract=contract,
+                    durationStr=durationStr,
+                    barSizeSetting=barSizeSetting,
+                    whatToShow='TRADES',
+                    useRTH=False  # or True, per your preference
+                )
+                if df is None or df.empty:
+                    logger.warning(f"No data returned for {symbol} {tf_name}, skipping.")
+                    continue
+
+                # df columns typically: date, open, high, low, close, volume, barCount, WAP
+                indicators = compute_indicators(df, lookback=lookback)
+                if indicators is None:
+                    logger.warning(f"Not enough data to compute indicators for {symbol} {tf_name}.")
+                    continue
+
+                tf_indicator_dict[tf_name] = indicators
+
+                # Optionally, we can compute the probability timeframe by timeframe 
+                # or we can gather all timeframes then do a single model call.
+                # This example defers the model call until we gather all timeframes.
+
+            except Exception as e:
+                logger.error(f"Failed to fetch or compute data for {symbol} {tf_name}: {e}")
+
+        # If we want a single model input that includes all timeframes:
+        if tf_indicator_dict:
+            # Pass the dictionary of timeframe indicators to the model
+            probability = trend_model.predict_probability(tf_indicator_dict)
+
+            # Determine signal
+            if probability >= thresholds['continue']:
+                signal = "Continue"
+            elif probability >= thresholds['watch']:
+                signal = "Watch"
+            else:
+                signal = "Reverse"
+
+            # We may want to produce a row for each timeframe 
+            # OR a single row summarizing all timeframes. 
+            # The original spec shows separate rows for each timeframe.
+
+            for tf_name in tf_indicator_dict:
+                row = {
+                    'symbol': symbol,
+                    'timeframe': tf_name,
+                    'ADX': tf_indicator_dict[tf_name]['ADX'],
+                    '%Above20MA': tf_indicator_dict[tf_name]['%Above20MA'],
+                    'R2': tf_indicator_dict[tf_name]['R2'],
+                    'probability': probability,  # same probability for all timeframes in this example
+                    'signal': signal
+                }
+                results.append(row)
+
+    # Print results
+    print_report(results, thresholds)
+
+    # Disconnect IB
+    ib_client.disconnect()
+
+if __name__ == "__main__":
+    main()
+How To Run
+Create and activate a virtual environment:
+
+bash
+Copy
+python -m venv venv
+source venv/bin/activate  # on Linux/Mac
+# or venv\Scripts\activate on Windows
+Install dependencies:
+
+bash
+Copy
+pip install -r requirements.txt
+Prepare your config.yaml to match your Interactive Brokers settings and contracts.
+
+Ensure TWS/IB Gateway is running and listening on 127.0.0.1:7497 (or whichever port you configure).
+
+Run the application:
+
+bash
+Copy
+python main.py --config config.yaml --host 127.0.0.1 --port 7497 --clientId 1
+Check the console output. You should see the terminal table of results, color-coded.
+
+Testing & Notes
+Unit tests: Create tests/ directory and write tests using pytest or unittest for:
+
+indicators.py (check ADX, %Above20MA, R² calculations).
+
+model.py (mock a logistic regression model).
+
+Integration tests: Mock or stub IB data requests if you cannot connect to TWS for automated tests.
+
+Logging: The above code uses loguru for demonstration. You can switch to Python’s logging if you prefer.
+
+Security: Don’t hardcode credentials. If you need IB username/password, pass them securely via environment variables or a secure secrets manager, not directly in code.
+
+Rate limiting: If you have many symbols/timeframes, use time.sleep() or schedule requests to avoid hitting IB’s data limits.
+
+This example is a starting template; you’ll likely need to refine it to fit your exact needs, data availability, and production environment. Good luck and happy coding!
