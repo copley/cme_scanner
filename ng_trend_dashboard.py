@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Optional
+from collections import deque, Counter
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -72,19 +73,55 @@ class L2Feed:
 class FeatureEngine:
     def __init__(self, book: OrderBook):
         self.book = book
-        self.mid_prices: List[float] = []
+        self.mid_prices: deque[float] = deque(maxlen=120)
+        self.price_bins: deque[float] = deque(maxlen=120)
 
     def compute(self) -> Dict[str, float]:
         mid = 0.0
         if self.book.bids and self.book.asks:
             mid = (self.book.bids[0].price + self.book.asks[0].price) / 2
             self.mid_prices.append(mid)
-            self.mid_prices = self.mid_prices[-120:]
+            self.price_bins.append(round(mid, 2))
         vwap = sum(self.mid_prices) / len(self.mid_prices) if self.mid_prices else 0.0
         imbalance = sum(b.size for b in self.book.bids) - sum(a.size for a in self.book.asks)
         wall = max([lvl.size for lvl in (self.book.bids + self.book.asks)] or [0])
         delta = mid - vwap if self.mid_prices else 0.0
-        return {"mid": mid, "vwap": vwap, "imbalance": imbalance, "wall": wall, "delta": delta}
+
+        fib_prox = 0.0
+        price_energy = 0.0
+        vibration = 0.0
+        resonance = 0.0
+
+        mp_len = len(self.mid_prices)
+        if mp_len > 1:
+            hi = max(self.mid_prices)
+            lo = min(self.mid_prices)
+            if hi != lo:
+                fib_levels = [hi - r*(hi - lo) for r in (0.382, 0.5, 0.618)]
+                fib_prox = float(min(abs(mid - f) for f in fib_levels))
+
+            look = min(10, mp_len-1)
+            price_energy = self.mid_prices[-1] - self.mid_prices[-look]
+            diffs = [self.mid_prices[i+1]-self.mid_prices[i] for i in range(-look, -1)]
+            if diffs:
+                vibration = float(pd.Series(diffs).std())
+
+            cnt = Counter(self.price_bins)
+            if cnt:
+                _, count = cnt.most_common(1)[0]
+                resonance = count / len(self.price_bins)
+
+        return {
+            "mid": mid,
+            "vwap": vwap,
+            "imbalance": imbalance,
+            "wall": wall,
+            "delta": delta,
+            "fib_proximity": fib_prox,
+            "price_energy": price_energy,
+            "vibration_quality": vibration,
+            "price_resonance": resonance,
+        }
 
 class ConfidenceEngine:
     def __init__(self):
@@ -152,7 +189,9 @@ class SQLiteLogger:
         cur.execute(
             """CREATE TABLE IF NOT EXISTS analysis(
                 ts TEXT, mid REAL, vwap REAL, imbalance REAL,
-                wall REAL, delta REAL, confidence INTEGER, phase TEXT, advice TEXT
+                wall REAL, delta REAL,
+                fib REAL, energy REAL, vibration REAL, resonance REAL,
+                confidence INTEGER, phase TEXT, advice TEXT
             )"""
         )
         self.conn.commit()
@@ -174,7 +213,7 @@ class SQLiteLogger:
 
     def log_analysis(self, ts: datetime, feats: Dict[str, float], conf: int, phase: str, advice: str):
         self.conn.execute(
-            "INSERT INTO analysis VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO analysis VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 ts.isoformat(),
                 feats["mid"],
@@ -182,6 +221,10 @@ class SQLiteLogger:
                 feats["imbalance"],
                 feats["wall"],
                 feats["delta"],
+                feats["fib_proximity"],
+                feats["price_energy"],
+                feats["vibration_quality"],
+                feats["price_resonance"],
                 conf,
                 phase,
                 advice,
@@ -229,6 +272,10 @@ class Dashboard:
             table.add_row("Imbalance", f"{m['imbalance']:.0f}")
             table.add_row("Wall", f"{m['wall']:.0f}")
             table.add_row("Delta", f"{m['delta']:.3f}")
+            table.add_row("Fib Prox", f"{m['fib_proximity']:.3f}")
+            table.add_row("Energy", f"{m['price_energy']:+.3f}")
+            table.add_row("Vibration", f"{m['vibration_quality']:.3f}")
+            table.add_row("Resonance", f"{m['price_resonance']:.2f}")
             table.add_row("Confidence", str(m['conf']))
             table.add_row("Phase", m['phase'])
             table.add_row("Advice", m['advice'])
