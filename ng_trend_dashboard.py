@@ -1,45 +1,50 @@
+#!/usr/bin/env python3
 """
-Real-Time NG Trend Confidence Dashboard (single-file version)
-Dependencies: ib-insync, rich, aiosqlite, python-dotenv
+Real-Time NG Trend Confidence Dashboard
+(No database – everything in RAM)
+
+Dependencies
+------------
+pip install ib-insync rich python-dotenv pandas
 """
 
 import asyncio
-import json
 import math
 import os
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
-from statistics import mean
-from typing import Deque, List, Literal
+from typing import Deque, Dict, List, Literal, Optional, Tuple
 
 from dotenv import load_dotenv
-from ib_insync import IB, Contract, util
+from ib_insync import IB, Contract, Ticker
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
-import aiosqlite
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
 
 load_dotenv()
 
-# ----------------------------- Configuration ----------------------------- #
-
 @dataclass(frozen=True)
 class Settings:
-    tws_host: str = os.getenv("TWS_HOST", "127.0.0.1")
-    tws_port: int = int(os.getenv("TWS_PORT", "7497"))
-    tws_client_id: int = int(os.getenv("TWS_CLIENT_ID", "42"))
-    depth_levels: int = int(os.getenv("DEPTH_LEVELS", "5"))
-    roll_window_s: int = int(os.getenv("ROLL_WINDOW_S", "120"))
-    conf_tau_s: int = int(os.getenv("CONF_TAU_S", "30"))
+    tws_host:     str = os.getenv("TWS_HOST", "127.0.0.1")
+    tws_port:     int = int(os.getenv("TWS_PORT", 7497))
+    tws_client_id:int = int(os.getenv("TWS_CLIENT_ID", 42))
+    depth_levels: int = int(os.getenv("DEPTH_LEVELS", 5))
+    roll_window_s:int = int(os.getenv("ROLL_WINDOW_S", 120))
+    conf_tau_s:   int = int(os.getenv("CONF_TAU_S", 30))
+    refresh_secs: int = int(os.getenv("REFRESH_SECS", 10))
 
-settings = Settings()
+S = Settings()
 
 Side = Literal["bid", "ask"]
 
-
-# ----------------------------- Level 2 Ingestion ----------------------------- #
+# --------------------------------------------------------------------------- #
+# Order-book ingestion
+# --------------------------------------------------------------------------- #
 
 @dataclass
 class L2Level:
@@ -47,474 +52,287 @@ class L2Level:
     position: int
     price: float
     size: float
-    mm_id: str
-    update_type: int
-
+    mmid: str
+    op: int        # operation code
 
 @dataclass
 class L2Snapshot:
     bids: List[L2Level]
     asks: List[L2Level]
     last_price: float
-    ts_exchange: datetime
     ts_local: datetime
 
-
 class L2Ingestor:
-    def __init__(self, contract: Contract, queue: asyncio.Queue):
+    """Consumes L2 book + last trade price and emits Snapshot objects."""
+
+    def __init__(self, contract: Contract, out_q: asyncio.Queue):
         self.ib = IB()
         self.contract = contract
-        self.queue = queue
-        self.depth_levels = settings.depth_levels
-        self._snapshot: dict[str, list[L2Level]] = {"bid": [], "ask": []}
+        self.out_q  = out_q
+        self.depth  = {"bid": {}, "ask": {}}
+        self.last   = 0.0
 
-    async def start(self) -> None:
-        await self.ib.connectAsync(
-            settings.tws_host, settings.tws_port, clientId=settings.tws_client_id
-        )
-        self._register_handlers()
-        self.ib.reqMktDepth(self.contract, numRows=self.depth_levels, isSmartDepth=False)
+    async def start(self):
+        await self.ib.connectAsync(S.tws_host, S.tws_port, clientId=S.tws_client_id)
+        self._reg_handlers()
+        self.ib.reqMktDepth(self.contract, numRows=S.depth_levels)
+        # periodic snapshot builder
+        asyncio.create_task(self._snapshot_loop())
 
-    def _register_handlers(self) -> None:
-        self.ib.pendingTickersEvent += self._on_tick_price
+    # ---------- IB event handlers ---------- #
+    def _reg_handlers(self):
         self.ib.updateMktDepthEvent += self._on_depth
+        self.ib.pendingTickersEvent += self._on_tick
 
-    def _on_tick_price(self, tickers):
+    def _on_depth(self, _:Ticker, pos:int, op:int, side:int, price:float,size:float):
+        side_str : Side = "bid" if side==1 else "ask"
+        self.depth[side_str][pos] = L2Level(side_str,pos,price,size,"",op)
+
+    def _on_tick(self, tickers):
         for t in tickers:
-            if t.contract.conId != self.contract.conId:
+            if t.last is not None:
+                self.last = t.last
+
+    # ---------- assemble & push ---------- #
+    async def _snapshot_loop(self):
+        while True:
+            await asyncio.sleep(0.1)
+            if not (self.depth["bid"] and self.depth["ask"]):
                 continue
-            self._last_price = t.last
-            break
-
-    def _on_depth(
-        self,
-        req_id: int,
-        position: int,
-        operation: int,
-        side: int,
-        price: float,
-        size: float,
-        mm_id: str,
-    ):
-        side_str: Side = "bid" if side == 1 else "ask"
-        level = L2Level(
-            side=side_str,
-            position=position,
-            price=price,
-            size=size,
-            mm_id=mm_id,
-            update_type=operation,
-        )
-        book_side = self._snapshot[side_str]
-        while len(book_side) <= position:
-            book_side.append(level)
-        book_side[position] = level
-        if len(self._snapshot["bid"]) and len(self._snapshot["ask"]):
+            bids = [self.depth["bid"].get(i, L2Level("bid",i,0,0,"",0))
+                    for i in range(S.depth_levels)]
+            asks = [self.depth["ask"].get(i, L2Level("ask",i,0,0,"",0))
+                    for i in range(S.depth_levels)]
             snap = L2Snapshot(
-                bids=self._snapshot["bid"][: self.depth_levels],
-                asks=self._snapshot["ask"][: self.depth_levels],
-                last_price=getattr(self, "_last_price", 0.0),
-                ts_exchange=datetime.now(timezone.utc),
-                ts_local=datetime.utcnow().replace(tzinfo=timezone.utc),
+                bids=bids,
+                asks=asks,
+                last_price=self.last,
+                ts_local=datetime.utcnow().replace(tzinfo=timezone.utc)
             )
-            asyncio.create_task(self.queue.put(snap))
+            await self.out_q.put(snap)
 
-
-# ----------------------------- Feature Engineering ----------------------------- #
+# --------------------------------------------------------------------------- #
+# Feature engineering
+# --------------------------------------------------------------------------- #
 
 @dataclass
 class FeatureVector:
     ts: datetime
-    book_imbalance: float
-    absorption_score: float
-    spoof_flag: bool
-    wall_px: float | None
-    wall_size: float | None
+    book_imb: float
+    wall_px: Optional[float]
+    wall_sz: Optional[float]
     vwap_delta: float
-
+    mid: float
 
 class FeatureEngine:
     def __init__(self, in_q: asyncio.Queue, out_q: asyncio.Queue):
         self.in_q, self.out_q = in_q, out_q
-        self.buffer: Deque[L2Snapshot] = deque(maxlen=settings.roll_window_s)
+        self.buf : Deque[L2Snapshot] = deque(maxlen=S.roll_window_s*10)
 
     async def run(self):
         while True:
-            snap: L2Snapshot = await self.in_q.get()
-            self.buffer.append(snap)
-            if len(self.buffer) < 2:
+            snap:L2Snapshot = await self.in_q.get()
+            self.buf.append(snap)
+            if len(self.buf) < 2:         # need history
                 continue
-            fv = self._compute_features()
+            fv = self._compute()
             await self.out_q.put(fv)
 
-    def _compute_features(self) -> FeatureVector:
-        latest = self.buffer[-1]
+    def _compute(self)->FeatureVector:
+        latest = self.buf[-1]
         bid_qty = sum(l.size for l in latest.bids)
         ask_qty = sum(l.size for l in latest.asks)
-        book_imbalance = bid_qty - ask_qty
-        repeat_price = latest.bids[0].price == self.buffer[-2].bids[0].price
-        filled_size = self.buffer[-2].bids[0].size - latest.bids[0].size
-        absorption_score = max(0.0, filled_size) / max(1.0, self.buffer[-2].bids[0].size)
-        spoof_flag = False
-        if len(self.buffer) >= 3:
-            prev2 = self.buffer[-3].bids[0].size
-            prev1 = self.buffer[-2].bids[0].size
-            cur = latest.bids[0].size
-            if prev1 > prev2 * 2 and cur < prev1 / 2:
-                spoof_flag = True
-        wall_px, wall_size = None, None
-        for lvl in latest.bids + latest.asks:
-            if lvl.size > max(bid_qty, ask_qty) * 0.5:
-                wall_px, wall_size = lvl.price, lvl.size
+        book_imb = bid_qty - ask_qty
+
+        # wall detection
+        wall_px = wall_sz = None
+        threshold = max(bid_qty,ask_qty)*0.5
+        for lvl in (*latest.bids, *latest.asks):
+            if lvl.size > threshold:
+                wall_px, wall_sz = lvl.price, lvl.size
                 break
-        prices = [s.last_price for s in self.buffer]
-        sizes = [sum(l.size for l in s.bids + s.asks) for s in self.buffer]
-        vwap = sum(p * q for p, q in zip(prices, sizes)) / sum(sizes)
-        vwap_delta = latest.last_price - vwap
-        return FeatureVector(
-            ts=latest.ts_local,
-            book_imbalance=book_imbalance,
-            absorption_score=absorption_score,
-            spoof_flag=spoof_flag,
-            wall_px=wall_px,
-            wall_size=wall_size,
-            vwap_delta=vwap_delta,
-        )
 
+        # rolling VWAP
+        prices = [s.last_price or (s.bids[0].price+s.asks[0].price)/2 for s in self.buf]
+        sizes  = [sum(l.size for l in (*s.bids,*s.asks)) for s in self.buf]
+        vwap   = sum(p*q for p,q in zip(prices,sizes))/max(1,sum(sizes))
+        vwap_delta = (latest.last_price or prices[-1]) - vwap
 
-# ----------------------------- Confidence Engine ----------------------------- #
+        mid = (latest.bids[0].price + latest.asks[0].price)/2
+
+        return FeatureVector(latest.ts_local,book_imb,wall_px,wall_sz,vwap_delta,mid)
+
+# --------------------------------------------------------------------------- #
+# Confidence
+# --------------------------------------------------------------------------- #
 
 @dataclass
 class Confidence:
     ts: datetime
-    score_pct: float
-    decay_pct: float
-    trajectory: str
-
+    score: float
+    trajectory:str
 
 class ConfidenceEngine:
-    def __init__(self, in_q: asyncio.Queue, out_q: asyncio.Queue):
-        self.in_q, self.out_q = in_q, out_q
-        self.prev_score = 50.0
+    def __init__(self,in_q:asyncio.Queue,out_q:asyncio.Queue):
+        self.in_q,self.out_q=in_q,out_q
+        self.score=50.0
 
     async def run(self):
         while True:
-            fv: FeatureVector = await self.in_q.get()
-            new_score = self._calc_score(fv)
-            decay = new_score - self.prev_score
-            traj = "up" if decay > 1 else "down" if decay < -1 else "flat"
-            conf = Confidence(ts=fv.ts, score_pct=new_score, decay_pct=decay, trajectory=traj)
-            self.prev_score = new_score
-            await self.out_q.put(conf)
+            fv:FeatureVector=await self.in_q.get()
+            prev=self.score
+            # exponential decay
+            self.score = 50 + (self.score-50)*math.exp(-1/S.conf_tau_s)
+            # boosts
+            self.score += 0.0004*fv.book_imb + 20*math.tanh(fv.vwap_delta/0.02)
+            self.score = max(0,min(100,self.score))
+            traj = "up" if self.score>prev+1 else "down" if self.score<prev-1 else "flat"
+            await self.out_q.put(Confidence(fv.ts,self.score,traj))
 
-    def _calc_score(self, fv: FeatureVector) -> float:
-        β1, β2 = 0.0005, 30.0
-        base = β1 * fv.book_imbalance + β2 * fv.absorption_score
-        if fv.spoof_flag:
-            base -= 20.0
-        decay_factor = math.exp(-10 / settings.conf_tau_s)
-        raw = self.prev_score * decay_factor + base
-        return max(0.0, min(100.0, raw))
+# --------------------------------------------------------------------------- #
+# Phase + Advice
+# --------------------------------------------------------------------------- #
 
-
-# ----------------------------- Phase Detector ----------------------------- #
-
-Phase = Literal[
-    "TrendingUp",
-    "TrendingDown",
-    "Expanding",
-    "Choppy",
-    "Consolidating",
-    "Reversing",
-]
-
+Phase = Literal["TrendingUp","TrendingDown","Consolidating","Reversing","Choppy"]
 
 @dataclass
 class PhaseSnapshot:
     ts: datetime
     phase: Phase
-    rationale: str
-
+    rationale:str
 
 class PhaseDetector:
-    def __init__(self, feat_q: asyncio.Queue, conf_q: asyncio.Queue, out_q: asyncio.Queue):
-        self.feat_q, self.conf_q, self.out_q = feat_q, conf_q, out_q
-        self._latest_feat: FeatureVector | None = None
-        self._latest_conf: Confidence | None = None
+    def __init__(self,feat_q:asyncio.Queue,conf_q:asyncio.Queue,out_q:asyncio.Queue):
+        self.fq,self.cq,self.oq=feat_q,conf_q,out_q
+        self.fv:Optional[FeatureVector]=None
+        self.conf:Optional[Confidence]=None
 
     async def run(self):
         while True:
-            done, _ = await asyncio.wait(
-                [self.feat_q.get(), self.conf_q.get()], return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in done:
-                item = task.result()
-                if isinstance(item, FeatureVector):
-                    self._latest_feat = item
-                else:
-                    self._latest_conf = item
-            if self._latest_feat and self._latest_conf:
-                phase = self._classify(self._latest_feat, self._latest_conf)
-                await self.out_q.put(phase)
+            done,_=await asyncio.wait(
+                [self.fq.get(),self.cq.get()],return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                o=t.result()
+                if isinstance(o,FeatureVector):self.fv=o
+                else:self.conf=o
+            if self.fv and self.conf:
+                snap=self._classify(self.fv,self.conf)
+                await self.oq.put(snap)
 
-    def _classify(self, fv: FeatureVector, conf: Confidence) -> PhaseSnapshot:
-        if conf.score_pct >= 65 and fv.vwap_delta > 0:
-            phase = "TrendingUp"
-        elif conf.score_pct >= 65 and fv.vwap_delta < 0:
-            phase = "TrendingDown"
-        elif abs(fv.book_imbalance) < 1 and abs(fv.vwap_delta) < 0.5:
-            phase = "Consolidating"
-        elif conf.decay_pct < -10:
-            phase = "Reversing"
-        else:
-            phase = "Choppy"
-        return PhaseSnapshot(
-            ts=fv.ts,
-            phase=phase,
-            rationale=f"imb={fv.book_imbalance:.0f}, vwapΔ={fv.vwap_delta:.2f}, conf={conf.score_pct:.1f}",
-        )
-
-
-# ----------------------------- Trader Assist ----------------------------- #
+    def _classify(self,fv:FeatureVector,conf:Confidence)->PhaseSnapshot:
+        if conf.score>65 and fv.vwap_delta>0: ph="TrendingUp"
+        elif conf.score>65 and fv.vwap_delta<0: ph="TrendingDown"
+        elif conf.score<40 and abs(fv.vwap_delta)<0.01: ph="Consolidating"
+        elif conf.trajectory=="down" and conf.score<50: ph="Reversing"
+        else: ph="Choppy"
+        rat=f"imb={fv.book_imb:.0f}, vwapΔ={fv.vwap_delta:.3f}, conf={conf.score:.1f}"
+        return PhaseSnapshot(fv.ts,ph,rat)
 
 @dataclass
 class Advice:
     ts: datetime
-    bias: str
-    text: str
-
+    text:str
 
 class TraderAssist:
-    def __init__(self, phase_q: asyncio.Queue, conf_q: asyncio.Queue, out_q: asyncio.Queue):
-        self.phase_q, self.conf_q, self.out_q = phase_q, conf_q, out_q
-        self._last_conf: Confidence | None = None
+    def __init__(self,phase_q:asyncio.Queue,conf_q:asyncio.Queue,out_q:asyncio.Queue):
+        self.pq,self.cq,self.oq=phase_q,conf_q,out_q
+        self.phase:Optional[PhaseSnapshot]=None
+        self.conf:Optional[Confidence]=None
 
     async def run(self):
         while True:
-            done, _ = await asyncio.wait(
-                [self.phase_q.get(), self.conf_q.get()], return_when=asyncio.FIRST_COMPLETED
-            )
+            done,_=await asyncio.wait([self.pq.get(),self.cq.get()],
+                                      return_when=asyncio.FIRST_COMPLETED)
             for t in done:
-                item = t.result()
-                if isinstance(item, Confidence):
-                    self._last_conf = item
-                else:
-                    phase = item
-            if self._last_conf and isinstance(item, PhaseSnapshot):
-                advice = self._advise(phase, self._last_conf)
-                await self.out_q.put(advice)
+                o=t.result()
+                if isinstance(o,PhaseSnapshot):self.phase=o
+                else:self.conf=o
+            if self.phase and self.conf:
+                await self.oq.put(self._advise())
 
-    def _advise(self, phase: PhaseSnapshot, conf: Confidence) -> Advice:
-        if phase.phase.startswith("TrendingUp") and conf.score_pct > 70:
-            bias = "Hold Long"
-        elif phase.phase.startswith("TrendingDown") and conf.score_pct > 70:
-            bias = "Hold Short"
-        elif phase.phase == "Reversing":
-            bias = "Exit / Flip"
-        elif conf.score_pct < 40:
-            bias = "Flat / Wait"
-        else:
-            bias = "Scalp"
-        txt = f"{bias} | {phase.phase} | conf={conf.score_pct:.0f}% ({conf.trajectory})"
-        return Advice(ts=phase.ts, bias=bias, text=txt)
+    def _advise(self)->Advice:
+        ph,sc=self.phase.phase,self.conf.score
+        if ph=="TrendingUp" and sc>70: bias="Hold Long"
+        elif ph=="TrendingDown" and sc>70: bias="Hold Short"
+        elif ph=="Reversing": bias="Exit / Flip"
+        elif sc<40: bias="Flat / Wait"
+        else: bias="Scalp"
+        txt=f"{bias} | {ph} | conf={sc:.0f}% ({self.conf.trajectory})"
+        return Advice(self.phase.ts,txt)
 
-
-# ----------------------------- Async Logger ----------------------------- #
-
-class LoggerDB:
-    DB_PATH = Path("ng_dash.sqlite")
-
-    def __init__(self):
-        self._queue: asyncio.Queue = asyncio.Queue()
-
-    async def writer(self):
-        async with aiosqlite.connect(self.DB_PATH) as db:
-            await self._create_schema(db)
-            while True:
-                item = await self._queue.get()
-                if isinstance(item, L2Snapshot):
-                    await db.execute(
-                        "INSERT OR IGNORE INTO ticks VALUES(?,?,?,?,?)",
-                        (
-                            int(item.ts_local.timestamp()),
-                            item.last_price,
-                            json.dumps([l.__dict__ for l in item.bids]),
-                            json.dumps([l.__dict__ for l in item.asks]),
-                            item.ts_exchange.timestamp(),
-                        ),
-                    )
-                elif isinstance(item, FeatureVector):
-                    await db.execute(
-                        "INSERT OR IGNORE INTO features VALUES(?,?,?,?,?,?,?)",
-                        (
-                            int(item.ts.timestamp()),
-                            item.book_imbalance,
-                            item.absorption_score,
-                            int(item.spoof_flag),
-                            item.wall_px or 0,
-                            item.wall_size or 0,
-                            item.vwap_delta,
-                        ),
-                    )
-                elif isinstance(item, Confidence):
-                    await db.execute(
-                        "INSERT OR IGNORE INTO confidence VALUES(?,?,?,?)",
-                        (
-                            int(item.ts.timestamp()),
-                            item.score_pct,
-                            item.decay_pct,
-                            item.trajectory,
-                        ),
-                    )
-                elif isinstance(item, PhaseSnapshot):
-                    await db.execute(
-                        "INSERT OR IGNORE INTO phases VALUES(?,?,?)",
-                        (
-                            int(item.ts.timestamp()),
-                            item.phase,
-                            item.rationale,
-                        ),
-                    )
-                elif isinstance(item, Advice):
-                    await db.execute(
-                        "INSERT OR IGNORE INTO advice VALUES(?,?,?)",
-                        (int(item.ts.timestamp()), item.bias, item.text),
-                    )
-                await db.commit()
-
-    async def _create_schema(self, db):
-        await db.executescript(
-            """
-            PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS ticks(
-                ts_epoch INTEGER PRIMARY KEY,
-                last_price REAL,
-                bids_json TEXT,
-                asks_json TEXT,
-                ts_exch REAL
-            );
-            CREATE TABLE IF NOT EXISTS features(
-                ts_epoch INTEGER PRIMARY KEY,
-                book_imb REAL,
-                absorption REAL,
-                spoof INTEGER,
-                wall_px REAL,
-                wall_sz REAL,
-                vwap_delta REAL
-            );
-            CREATE TABLE IF NOT EXISTS confidence(
-                ts_epoch INTEGER PRIMARY KEY,
-                score REAL,
-                decay REAL,
-                traj TEXT
-            );
-            CREATE TABLE IF NOT EXISTS phases(
-                ts_epoch INTEGER PRIMARY KEY,
-                phase TEXT,
-                rationale TEXT
-            );
-            CREATE TABLE IF NOT EXISTS advice(
-                ts_epoch INTEGER PRIMARY KEY,
-                bias TEXT,
-                txt TEXT
-            );
-            """
-        )
-
-    def queue(self) -> asyncio.Queue:
-        return self._queue
-
-
-# ----------------------------- Dashboard ----------------------------- #
+# --------------------------------------------------------------------------- #
+# Dashboard
+# --------------------------------------------------------------------------- #
 
 class Dashboard:
-    def __init__(self, conf_q: asyncio.Queue, phase_q: asyncio.Queue, advice_q: asyncio.Queue):
-        self.conf_q, self.phase_q, self.advice_q = conf_q, phase_q, advice_q
-        self._latest_conf: Confidence | None = None
-        self._latest_phase: PhaseSnapshot | None = None
-        self._latest_advice: Advice | None = None
+    def __init__(self,conf_q,phase_q,adv_q):
+        self.conf_q,self.phase_q,self.adv_q=conf_q,phase_q,adv_q
+        self.conf:Optional[Confidence]=None
+        self.phase:Optional[PhaseSnapshot]=None
+        self.adv:Optional[Advice]=None
 
     async def run(self):
-        async with Live(self._render(), auto_refresh=False, refresh_per_second=4) as live:
+        async with Live(self._render(),auto_refresh=False,refresh_per_second=4) as live:
             while True:
-                await self._gather_updates()
-                live.update(self._render(), refresh=True)
-                await asyncio.sleep(10)
+                await self._drain()
+                live.update(self._render(),refresh=True)
+                await asyncio.sleep(S.refresh_secs)
 
-    async def _gather_updates(self):
-        for q in (self.conf_q, self.phase_q, self.advice_q):
+    async def _drain(self):
+        for q in (self.conf_q,self.phase_q,self.adv_q):
             while not q.empty():
-                item = q.get_nowait()
-                if isinstance(item, Confidence):
-                    self._latest_conf = item
-                elif isinstance(item, PhaseSnapshot):
-                    self._latest_phase = item
-                else:
-                    self._latest_advice = item
+                o=q.get_nowait()
+                if   isinstance(o,Confidence):     self.conf=o
+                elif isinstance(o,PhaseSnapshot):  self.phase=o
+                else:                              self.adv=o
 
-    def _render(self) -> Panel:
-        table = Table(title="NG Trend Confidence", expand=True)
-        table.add_column("Metric", justify="left")
-        table.add_column("Value", justify="right")
-
-        ts = datetime.utcnow().strftime("%H:%M:%S")
-        table.add_row("Timestamp (UTC)", ts)
-
-        if self._latest_conf:
-            bar = self._bar(self._latest_conf.score_pct)
-            table.add_row("Confidence", f"{self._latest_conf.score_pct:.1f}% {bar}")
-            table.add_row("Trajectory", self._latest_conf.trajectory)
-
-        if self._latest_phase:
-            table.add_row("Phase", self._latest_phase.phase)
-            table.add_row("Rationale", self._latest_phase.rationale)
-
-        if self._latest_advice:
-            table.add_row("Advice", self._latest_advice.text)
-
-        return Panel(table, border_style="cyan")
+    def _render(self)->Panel:
+        t=Table(title="NG Trend Dashboard",expand=True)
+        t.add_column("Metric"); t.add_column("Value",justify="right")
+        t.add_row("UTC",datetime.utcnow().strftime("%H:%M:%S"))
+        if self.conf:
+            t.add_row("Confidence",f"{self.conf.score:.1f}% {self._bar(self.conf.score)}")
+            t.add_row("Trajectory",self.conf.trajectory)
+        if self.phase:
+            t.add_row("Phase",self.phase.phase)
+            t.add_row("Rationale",self.phase.rationale)
+        if self.adv:
+            t.add_row("Advice",self.adv.text)
+        return Panel(t,border_style="cyan")
 
     @staticmethod
-    def _bar(pct: float, length: int = 20) -> str:
-        filled = int(pct / 100 * length)
-        return "[" + "█" * filled + "." * (length - filled) + "]"
+    def _bar(pct:float,l=20)->str:
+        filled=int(pct/100*l)
+        return "["+"█"*filled+"."*(l-filled)+"]"
 
+# --------------------------------------------------------------------------- #
+# Helper – contract builder
+# --------------------------------------------------------------------------- #
 
-def create_mes_contract() -> Contract:
-    contract = Contract()
-    contract.symbol = "NG"
-    contract.secType = "FUT"
-    contract.exchange = "NYMEX"
-    contract.currency = "USD"
-    contract.lastTradeDateOrContractMonth = "20250626"
-    contract.localSymbol = "NGN25"
-    contract.multiplier = "10000"
-    return contract
+def front_ng_contract()->Contract:
+    c=Contract(symbol="NG",secType="FUT",exchange="NYMEX",
+               currency="USD",lastTradeDateOrContractMonth="20250626")
+    return c
 
-
-# ----------------------------- Main ----------------------------- #
+# --------------------------------------------------------------------------- #
+# Main
+# --------------------------------------------------------------------------- #
 
 async def main():
     q_snap = asyncio.Queue(maxsize=1000)
     q_feat = asyncio.Queue(maxsize=1000)
     q_conf = asyncio.Queue(maxsize=1000)
-    q_phase = asyncio.Queue(maxsize=1000)
-    q_adv = asyncio.Queue(maxsize=1000)
+    q_phase= asyncio.Queue(maxsize=1000)
+    q_adv  = asyncio.Queue(maxsize=1000)
 
-    logger = LoggerDB()
-    asyncio.create_task(logger.writer())
-
-    ng_contract = create_mes_contract()
-
-    ingestor = L2Ingestor(contract=ng_contract, queue=q_snap)
+    ingestor = L2Ingestor(front_ng_contract(), q_snap)
     feat_eng = FeatureEngine(q_snap, q_feat)
     conf_eng = ConfidenceEngine(q_feat, q_conf)
-    phase_det = PhaseDetector(q_feat, q_conf, q_phase)
-    assist = TraderAssist(q_phase, q_conf, q_adv)
-    dash = Dashboard(q_conf, q_phase, q_adv)
+    phase_det= PhaseDetector(q_feat, q_conf, q_phase)
+    assist   = TraderAssist(q_phase, q_conf, q_adv)
+    dash     = Dashboard(q_conf, q_phase, q_adv)
 
     await ingestor.start()
-
     await asyncio.gather(
         feat_eng.run(),
         conf_eng.run(),
@@ -522,7 +340,6 @@ async def main():
         assist.run(),
         dash.run(),
     )
-
 
 if __name__ == "__main__":
     asyncio.run(main())
