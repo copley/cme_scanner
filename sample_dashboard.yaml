@@ -1,0 +1,371 @@
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Trend & Forecast Monitor ‖ Symbol: NGU5 ‖ Last refresh: 14:38:00            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ① ONE‑MINUTE FRAME              (indicators recalculated every 60 s)        │
+├────────┬──────────┬────────┬──────────┬────────┬────────┬────────┬─────────┤
+│Indicator│  Value  │ Signal │  Phase   │ Prob % │ Z‑Score│Strength│ TTL (s) │
+├────────┼──────────┼────────┼──────────┼────────┼────────┼────────┼─────────┤
+│ADX       │  37.8   │ ↑Bull  │ Trending │ 71.2   │ +1.8σ │ Strong │   42    │
+│VWAP Δ    │ +0.018  │ ↑Bull  │ Trending │ 69.5   │ +1.6σ │ Strong │   46    │
+│Imbal 10L │  +44    │ ↑Bull  │ Trending │ 67.3   │ +1.4σ │ Strong │   38    │
+│EMA‑Slope │ +0.32%  │ ↑Bull  │ Trending │ 64.0   │ +1.1σ │ Moder. │   50    │
+│RSI       │  63.1   │ ↑Bull  │ Trending │ 61.8   │ +0.9σ │ Moder. │   41    │
+│BB Width  │  5.9 %  │  —     │ Volatile │ 57.2   │ +0.7σ │ Flip‑R │   45    │
+│ATR(14)   │  0.056  │  —     │ Volatile │ 54.9   │ +0.5σ │ Flip‑R │   48    │
+└────────┴──────────┴────────┴──────────┴────────┴────────┴────────┴─────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ② FIVE‑MINUTE FRAME            (indicators recalculated every 5 min)        │
+├────────┬──────────┬────────┬──────────┬────────┬────────┬────────┬─────────┤
+│Indicator│  Value  │ Signal │  Phase   │ Prob % │ Z‑Score│Strength│ TTL (m) │
+├────────┼──────────┼────────┼──────────┼────────┼────────┼────────┼─────────┤
+│ADX       │  29.4   │ ↑Bull  │ Trending │ 65.7   │ +1.3σ │ Strong │   3.4   │
+│Hull MA Δ │ +0.26%  │ ↑Bull  │ Trending │ 63.9   │ +1.1σ │ Moder. │   4.2   │
+│Aroon Up  │  92     │ ↑Bull  │ Trending │ 62.5   │ +1.0σ │ Moder. │   2.9   │
+│RSI       │  58.7   │ ↑Bull  │ Ranging  │ 59.2   │ +0.8σ │ Flip‑R │   3.7   │
+│BB Width  │  4.1 %  │  —     │ Contract │ 55.6   │ +0.6σ │ Flip‑R │   4.0   │
+│ChopIdx   │  38.1   │  —     │ Choppy   │ 53.4   │ +0.4σ │ Weak   │   3.2   │
+└────────┴──────────┴────────┴──────────┴────────┴────────┴────────┴─────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ③ FIFTEEN‑MINUTE FRAME         (indicators recalculated every 15 min)       │
+├────────┬──────────┬────────┬──────────┬────────┬────────┬────────┬─────────┤
+│Indicator│  Value  │ Signal │  Phase   │ Prob % │ Z‑Score│Strength│ TTL (m) │
+├────────┼──────────┼────────┼──────────┼────────┼────────┼────────┼─────────┤
+│ADX       │  22.1   │ ↑Bull  │ Trending │ 61.8   │ +0.9σ │ Moder. │   11    │
+│MACD Hist │ +0.011  │ ↑Bull  │ Trending │ 60.4   │ +0.8σ │ Moder. │   12    │
+│VWMA Δ    │ +0.14%  │ ↑Bull  │ Trending │ 58.9   │ +0.7σ │ Flip‑R │   10    │
+│ATR(14)   │  0.043  │  —     │ Volatile │ 56.3   │ +0.6σ │ Flip‑R │   13    │
+│Choppiness│  46.5   │  —     │ Choppy   │ 52.1   │ +0.3σ │ Weak   │    9    │
+└────────┴──────────┴────────┴──────────┴────────┴────────┴────────┴─────────┘
+
+───────────────────────────────────────────────────────────────────────────────
+Phase‑Consensus (3 frames weighted): **Trending‑Up** • Latency 0.5 s • CPU 8 % • RSS 123
+
+
+
+
+
+
+
+
+Trending (Uptrend/Downtrend)
+Ranging (Sideways)
+Consolidating
+Volatile
+Expanding/Contracting
+Breakout/Broken Out
+Reversing
+Choppy
+What Phase is the Market in? contraction, expansion, profit taking (trend phase)
+
+
+
+
+ADXR
+ADX/DMI
+Accelerator/Decelerator
+Accumulation Swing Index
+Accumulation/Distribution
+Adaptive Moving Average
+Arnaud Legoux Moving Average
+Aroon Oscillator
+Aroon Up/Dn
+Average True Range
+Awesome Oscillator
+Balance Of Power
+Bill William's Alligator
+Bill William's Alligator Oscillator
+Bollinger Band Width
+Bollinger Bands
+Camarilla Pivot Points
+Chaikin Money Flow
+Chaikin Oscillator
+Chaikin Volatility
+Chande Kroll Stop
+Chande Momentum Oscillator
+Chande Volatility Index Dynamic Average
+Chop Zone
+Choppiness Index
+Combo Wave
+Commodity Channel
+Connors RSI
+Coppock Curve
+Correlation Coefficient
+DMI
+DeMark Pivot Points
+Departure Chart
+Detrended Price Oscillator
+Donchian Channel Width
+Donchian Channels
+Double Exponential Moving Avg.
+Double Smoothed Stochastics Bressert
+Ease of Movement
+Elder-Ray
+Envelope
+Ergodic Oscillator
+Exponential Moving Avg.
+Fast Stochastic Oscillator
+Fibonacci Pivot Points
+Fisher Transform
+Floor Pivot Points
+Force Index
+High Low Bands
+Historical Volatility Ratio
+Hull Moving Average
+Ichimoku Clouds
+Intraday Intensity
+Intraday Intensity %
+Intraday Volume Weighted Average Price
+Keltner Channel
+Klinger Volume Oscillator
+Know Sure Thing
+Lane's Stochastic Oscillator
+Least Squares Moving Average
+Linear Regression (Least Square)
+Linear Regression Curve
+Linear Regression Intercept
+Linear Regression R-Squared
+Linear Regression Slope
+MA Crossover
+Mass Index
+McGinley Dynamic
+Momentum
+Money Flow Index
+Moving Avg. Conv. Div.
+Moving Standard Deviation
+Moving Volume Weighted Average Price
+Negative Volume Index
+Net Volume
+On Balance Volume
+Parabolic SAR
+Percent B
+Percentage Price Oscillator
+Percentage Volume Oscillator
+Performance
+Pivot Points
+Pivot Points High/Low
+Porsche Dots
+Positive Volume Index
+Price Oscillator
+Price Volume Trend
+Probability Zones
+Raff Channel
+Rate of Change
+Relative Momentum Index
+Relative Strength Ind
+Relative Vigor Index
+Relative Volatility Index
+Rolling Weekly Pivots
+Simple Moving Avg.
+Slow Stochastic Oscillator
+Standard Deviation Channel
+Stochastic Oscillator
+Stochastic RSI
+Swing Index
+TRIX
+TTM Squeeze
+Triangular Moving Average
+Triple Exponential Moving Avg.
+True Strength Index
+Typical Price
+Ultimate Osc.
+Variable Moving Average
+Vertical Horizontal Filter
+Volatility Stop
+Volume * PMO
+Volume Exponential Moving Average
+Volume Oscillator
+Volume Rate of Change
+Volume Simple Moving Average
+Volume Weighted Moving Average
+Vortex
+Wave A
+Wave B
+Wave C
+Weighted Close
+Weighted Moving Avg.
+Wilder Moving Average
+Williams Osc.
+Woodie Pivot Points
+Zig Zag 
+
+Here is a suggested matching of market descriptions to indicators based on their typical use:
+
+1. Trending (Uptrend/Downtrend)
+ADX/DMI
+Aroon Oscillator
+Aroon Up/Dn
+Moving Average Convergence Divergence (MACD)
+Hull Moving Average
+Exponential Moving Average (EMA)
+Simple Moving Average (SMA)
+Parabolic SAR
+Ichimoku Clouds
+Vortex Indicator
+TRIX
+Directional Movement Index (DMI)
+
+2. Ranging (Sideways)
+Relative Strength Index (RSI)
+Stochastic Oscillator
+Choppiness Index
+Bollinger Bands
+Average True Range (ATR)
+Williams Oscillator
+Slow Stochastic Oscillator
+Keltner Channel
+Volume Oscillator
+
+3. Consolidating
+Bollinger Band Width
+Choppiness Index
+Volume Weighted Moving Average (VWMA)
+Donchian Channels
+Accumulation/Distribution
+On-Balance Volume (OBV)
+Chaikin Money Flow (CMF)
+Chaikin Oscillator
+
+4. Volatile
+Average True Range (ATR)
+Historical Volatility Ratio
+Chaikin Volatility
+Chande Volatility Index
+Bollinger Bands
+Keltner Channel
+Donchian Channel Width
+Standard Deviation Channel
+
+5. Expanding/Contracting
+Bollinger Band Width
+Donchian Channel Width
+Average True Range (ATR)
+Chaikin Volatility
+Envelope
+Ichimoku Clouds
+
+6. Breakout/Broken Out
+Volume Oscillator
+Momentum Indicators (e.g., Momentum, ROC)
+Bollinger Band Breakouts
+Ichimoku Clouds
+Donchian Channels
+Awesome Oscillator
+TTM Squeeze
+Zig Zag
+
+7. Reversing
+Relative Strength Index (RSI)
+Stochastic Oscillator
+MACD Divergence
+Fisher Transform
+Chaikin Oscillator
+Momentum Indicators
+Williams Oscillator
+Chande Momentum Oscillator
+
+8. Choppy
+Choppiness Index
+Volume Oscillator
+Bollinger Bands
+Average True Range (ATR)
+Relative Strength Index (RSI)
+Stochastic Oscillator
+Chaikin Money Flow (CMF)
+
+Market Studies
+
+Comprehensive Studies
+Momentum Studies
+Moving Averages
+Pivot Studies
+Regression Studies
+Trend Studies
+Volatility Studies
+Volume Studies
+Licensed - SimplerOptions/John Carter
+
+Comprehensive Studies
+ADX/DMI
+Ichimoku Clouds
+Bollinger Bands
+Moving Avg. Conv. Div. (MACD)
+Awesome Oscillator
+True Strength Index
+Parabolic SAR
+Volume Weighted Moving Average (VWMA)
+
+Momentum Studies
+Momentum
+Relative Strength Index (RSI)
+Rate of Change (ROC)
+Chande Momentum Oscillator
+Stochastic Oscillator
+Fisher Transform
+Aroon Oscillator
+Know Sure Thing
+
+Moving Averages
+Simple Moving Avg. (SMA)
+Exponential Moving Avg. (EMA)
+Adaptive Moving Average
+Hull Moving Average
+Weighted Moving Avg.
+Arnaud Legoux Moving Average
+Triangular Moving Average
+Double Exponential Moving Avg.
+
+Pivot Studies
+Pivot Points
+Fibonacci Pivot Points
+Camarilla Pivot Points
+DeMark Pivot Points
+Rolling Weekly Pivots
+Floor Pivot Points
+
+Regression Studies
+Linear Regression (Least Square)
+Linear Regression Curve
+Linear Regression Intercept
+Linear Regression Slope
+Linear Regression R-Squared
+Raff Channel
+
+Trend Studies
+ADX/DMI
+Aroon Up/Dn
+Ichimoku Clouds
+Trendlines
+Donchian Channels
+MA Crossover
+Vortex
+Bill William's Alligator
+
+Volatility Studies
+Bollinger Bands
+Bollinger Band Width
+Average True Range (ATR)
+Chaikin Volatility
+Historical Volatility Ratio
+Chande Volatility Index
+Standard Deviation Channel
+TTM Squeeze
+
+Volume Studies
+Volume Oscillator
+Chaikin Money Flow (CMF)
+On Balance Volume (OBV)
+Accumulation/Distribution
+Volume Weighted Moving Average (VWMA)
+Klinger Volume Oscillator
+Volume Rate of Change
+Intraday Volume Weighted Average Price
+
+Licensed - SimplerOptions/John Carter
+TTM Squeeze
+Combo Wave
+Porsche Dots
+
